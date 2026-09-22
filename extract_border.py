@@ -1,3 +1,4 @@
+# Copyright (c) 2025 takotime808
 """
 Extract only the decorative border pattern from a photographed wedding
 invitation, discarding the card interior (text) and the background it was

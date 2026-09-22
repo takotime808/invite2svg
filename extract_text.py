@@ -1,3 +1,4 @@
+# Copyright (c) 2025 takotime808
 """
 Extract only the text inside the border of a photographed wedding
 invitation, discarding the border pattern and blank paper.
