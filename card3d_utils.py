@@ -406,10 +406,17 @@ def mesh_to_stl_bytes(mesh):
 
 
 def mesh_to_3mf_bytes(mesh, feature_mask, base_color="#f2ead6", feature_color="#6b6455"):
-    """Export as a 3MF with the plate and the raised/engraved artwork
-    tagged as two different base-material colors (per-triangle, via the
-    core 3MF spec's `pid`/`p1` triangle attributes -- not an extension),
-    so a color-aware slicer or viewer shows the two-tone card directly.
+    """Export as a 3MF with the plate and the raised/engraved artwork as
+    two separate mesh *objects*, grouped as components of one build item,
+    each tagged with its own base-material color.
+
+    Slicers with multi-color/multi-material support (Bambu Studio, Orca,
+    PrusaSlicer) key color/filament assignment off separate objects or
+    volumes, not off a single fused mesh with per-triangle color -- they
+    generally only pick up the embedded `displaycolor` as an initial
+    hint (support varies by version), but the object split itself is
+    what makes each part selectable and colorable at all, e.g. via
+    right-click > set filament in Bambu Studio's object list.
 
     STL has no concept of color at all, hence this separate format --
     `feature_mask` is the same per-face array `build_invite_mesh` returns.
@@ -422,14 +429,19 @@ def mesh_to_3mf_bytes(mesh, feature_mask, base_color="#f2ead6", feature_color="#
             h += "FF"
         return "#" + h.upper()
 
-    v, f = mesh.vertices, mesh.faces
-    pid_per_face = feature_mask.astype(int)
+    def submesh(mask):
+        sub = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces[mask], process=False)
+        sub.remove_unreferenced_vertices()
+        return sub
 
-    vertices_xml = "".join(f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>' for x, y, z in v)
-    triangles_xml = "".join(
-        f'<triangle v1="{t[0]}" v2="{t[1]}" v3="{t[2]}" pid="1" p1="{p}"/>'
-        for t, p in zip(f, pid_per_face)
-    )
+    def mesh_xml(m):
+        vertices_xml = "".join(f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>' for x, y, z in m.vertices)
+        triangles_xml = "".join(f'<triangle v1="{t[0]}" v2="{t[1]}" v3="{t[2]}"/>' for t in m.faces)
+        return f"<mesh>\n        <vertices>{vertices_xml}</vertices>\n        <triangles>{triangles_xml}</triangles>\n      </mesh>"
+
+    plate_mesh = submesh(~feature_mask)
+    artwork_mesh = submesh(feature_mask)
+
     model_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n'
@@ -438,14 +450,16 @@ def mesh_to_3mf_bytes(mesh, feature_mask, base_color="#f2ead6", feature_color="#
         f'      <base name="Plate" displaycolor="{hex_to_srgba(base_color)}"/>\n'
         f'      <base name="Artwork" displaycolor="{hex_to_srgba(feature_color)}"/>\n'
         "    </basematerials>\n"
-        '    <object id="2" type="model" pid="1" pindex="0">\n'
-        "      <mesh>\n"
-        f"        <vertices>{vertices_xml}</vertices>\n"
-        f"        <triangles>{triangles_xml}</triangles>\n"
-        "      </mesh>\n"
+        f'    <object id="2" type="model" pid="1" pindex="0">\n      {mesh_xml(plate_mesh)}\n    </object>\n'
+        f'    <object id="3" type="model" pid="1" pindex="1">\n      {mesh_xml(artwork_mesh)}\n    </object>\n'
+        '    <object id="4" type="model">\n'
+        "      <components>\n"
+        '        <component objectid="2"/>\n'
+        '        <component objectid="3"/>\n'
+        "      </components>\n"
         "    </object>\n"
         "  </resources>\n"
-        '  <build>\n    <item objectid="2"/>\n  </build>\n'
+        '  <build>\n    <item objectid="4"/>\n  </build>\n'
         "</model>\n"
     )
 
