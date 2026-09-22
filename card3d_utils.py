@@ -259,6 +259,10 @@ def build_invite_mesh(
 ):
     """Build the final watertight solid: a plate with the given polygons
     either raised above it (mode="raised") or cut into it (mode="indented").
+
+    Returns (mesh, feature_mask), where feature_mask is a bool array
+    aligned with mesh.faces: True for the raised/engraved artwork, False
+    for the plain plate -- so callers can color the two differently.
     """
     if not polygons:
         raise ValueError("No artwork polygons to extrude.")
@@ -321,6 +325,13 @@ def build_invite_mesh(
     )
     parts.append(_drop_cap(base_solid, top_z, flip=False))
 
+    # everything added above this point is the plain plate; everything
+    # added below is the raised/engraved artwork -- recorded as a
+    # per-face mask (trimesh preserves face order/count through
+    # concatenate/merge_vertices/remove_unreferenced_vertices) so callers
+    # can color the two parts differently (e.g. a 2-color 3MF export).
+    n_background_faces = sum(len(p.faces) for p in parts)
+
     # each peg's outer boundary is one of top_cap_main's hole rings (exact
     # same coordinates the cap uses -- see above), carrying whichever
     # original features' own internal holes (letter counters) fall inside
@@ -356,25 +367,28 @@ def build_invite_mesh(
     result = trimesh.util.concatenate(parts)
     result.merge_vertices(digits_vertex=8)
     result.remove_unreferenced_vertices()
-    return result
+
+    feature_mask = np.zeros(len(result.faces), dtype=bool)
+    feature_mask[n_background_faces:] = True
+    return result, feature_mask
 
 
-def mesh_to_plotly_figure(mesh):
+def mesh_to_plotly_figure(mesh, feature_mask=None, base_color="#f2ead6", feature_color="#6b6455"):
     import plotly.graph_objects as go
 
     v, f = mesh.vertices, mesh.faces
-    fig = go.Figure(
-        data=[
-            go.Mesh3d(
-                x=v[:, 0], y=v[:, 1], z=v[:, 2],
-                i=f[:, 0], j=f[:, 1], k=f[:, 2],
-                color="#f2ead6",
-                flatshading=False,
-                lighting=dict(ambient=0.55, diffuse=0.7, specular=0.35, roughness=0.6, fresnel=0.1),
-                lightposition=dict(x=200, y=400, z=500),
-            )
-        ]
+    mesh3d_kwargs = dict(
+        x=v[:, 0], y=v[:, 1], z=v[:, 2],
+        i=f[:, 0], j=f[:, 1], k=f[:, 2],
+        flatshading=False,
+        lighting=dict(ambient=0.55, diffuse=0.7, specular=0.35, roughness=0.6, fresnel=0.1),
+        lightposition=dict(x=200, y=400, z=500),
     )
+    if feature_mask is None:
+        mesh3d_kwargs["color"] = base_color
+    else:
+        mesh3d_kwargs["facecolor"] = np.where(feature_mask, feature_color, base_color)
+    fig = go.Figure(data=[go.Mesh3d(**mesh3d_kwargs)])
     fig.update_layout(
         scene=dict(
             aspectmode="data",
@@ -389,3 +403,70 @@ def mesh_to_plotly_figure(mesh):
 
 def mesh_to_stl_bytes(mesh):
     return mesh.export(file_type="stl")
+
+
+def mesh_to_3mf_bytes(mesh, feature_mask, base_color="#f2ead6", feature_color="#6b6455"):
+    """Export as a 3MF with the plate and the raised/engraved artwork
+    tagged as two different base-material colors (per-triangle, via the
+    core 3MF spec's `pid`/`p1` triangle attributes -- not an extension),
+    so a color-aware slicer or viewer shows the two-tone card directly.
+
+    STL has no concept of color at all, hence this separate format --
+    `feature_mask` is the same per-face array `build_invite_mesh` returns.
+    """
+    import zipfile
+
+    def hex_to_srgba(hex_color):
+        h = hex_color.lstrip("#")
+        if len(h) == 6:
+            h += "FF"
+        return "#" + h.upper()
+
+    v, f = mesh.vertices, mesh.faces
+    pid_per_face = feature_mask.astype(int)
+
+    vertices_xml = "".join(f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>' for x, y, z in v)
+    triangles_xml = "".join(
+        f'<triangle v1="{t[0]}" v2="{t[1]}" v3="{t[2]}" pid="1" p1="{p}"/>'
+        for t, p in zip(f, pid_per_face)
+    )
+    model_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n'
+        "  <resources>\n"
+        '    <basematerials id="1">\n'
+        f'      <base name="Plate" displaycolor="{hex_to_srgba(base_color)}"/>\n'
+        f'      <base name="Artwork" displaycolor="{hex_to_srgba(feature_color)}"/>\n'
+        "    </basematerials>\n"
+        '    <object id="2" type="model" pid="1" pindex="0">\n'
+        "      <mesh>\n"
+        f"        <vertices>{vertices_xml}</vertices>\n"
+        f"        <triangles>{triangles_xml}</triangles>\n"
+        "      </mesh>\n"
+        "    </object>\n"
+        "  </resources>\n"
+        '  <build>\n    <item objectid="2"/>\n  </build>\n'
+        "</model>\n"
+    )
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
+        '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n'
+        '  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n'
+        "</Types>\n"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        '  <Relationship Id="rel0" Target="/3D/3dmodel.model" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n'
+        "</Relationships>\n"
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("3D/3dmodel.model", model_xml)
+    return buf.getvalue()

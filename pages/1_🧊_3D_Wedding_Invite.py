@@ -17,6 +17,7 @@ import streamlit as st
 from card3d_utils import (
     MM_PER_INCH,
     build_invite_mesh,
+    mesh_to_3mf_bytes,
     mesh_to_plotly_figure,
     mesh_to_stl_bytes,
     parse_svg_polygons,
@@ -25,7 +26,6 @@ from card3d_utils import (
 st.set_page_config(page_title="3D Wedding Invite", page_icon="🧊", layout="wide")
 
 st.title("3D Wedding Invite")
-st.markdown("**NOTE:** Web renderings looks need work. Downloaded SVGs look good.")
 st.caption(
     "Extrudes a 3\"x5\" base plate and lays the invite's SVG artwork on top of it, "
     "either raised (emboss) or cut in (engrave), as a single watertight solid ready to 3D print."
@@ -62,6 +62,11 @@ with st.sidebar:
     )
     mode = "raised" if mode_label.startswith("Raised") else "indented"
 
+    st.header("Colors")
+    st.caption("Used for the preview and the 3MF export (STL has no color).")
+    base_color = st.color_picker("Plate color", "#F2EAD6")
+    feature_color = st.color_picker("Artwork color", "#6B6455")
+
 if svg_text:
     if st.button("Generate 3D Model", type="primary"):
         with st.spinner("Parsing SVG and building the 3D solid..."):
@@ -74,7 +79,7 @@ if svg_text:
                 plate_width_mm = plate_w_in * MM_PER_INCH
                 plate_height_mm = plate_h_in * MM_PER_INCH
 
-                mesh = build_invite_mesh(
+                mesh, feature_mask = build_invite_mesh(
                     polygons,
                     plate_width_mm=plate_width_mm,
                     plate_height_mm=plate_height_mm,
@@ -87,16 +92,46 @@ if svg_text:
                 st.error(str(e))
                 st.stop()
 
+        # a download_button click reruns the script with st.button() back to
+        # False, so the result has to live in session_state -- otherwise
+        # downloading the STL makes the 3MF button (and the plot) vanish.
+        st.session_state["invite_3d"] = {
+            "mesh": mesh,
+            "feature_mask": feature_mask,
+            "svg_name": svg_name,
+            "plate_w_in": plate_w_in,
+            "plate_h_in": plate_h_in,
+        }
+
+    if "invite_3d" in st.session_state:
+        result = st.session_state["invite_3d"]
+        mesh = result["mesh"]
+        feature_mask = result["feature_mask"]
+
         st.success(
-            f"Built a {plate_w_in:g}\"x{plate_h_in:g}\" solid "
+            f"Built a {result['plate_w_in']:g}\"x{result['plate_h_in']:g}\" solid "
             f"({'watertight' if mesh.is_watertight else 'NOT watertight — check the SVG'})."
         )
 
-        st.plotly_chart(mesh_to_plotly_figure(mesh), use_container_width=True)
-
-        st.download_button(
-            "Download STL",
-            data=mesh_to_stl_bytes(mesh),
-            file_name=f"{svg_name}_3d.stl",
-            mime="model/stl",
+        st.plotly_chart(
+            mesh_to_plotly_figure(mesh, feature_mask, base_color, feature_color),
+            use_container_width=True,
         )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "Download STL",
+                data=mesh_to_stl_bytes(mesh),
+                file_name=f"{result['svg_name']}_3d.stl",
+                mime="model/stl",
+                help="Geometry only — STL has no concept of color.",
+            )
+        with col2:
+            st.download_button(
+                "Download 3MF (colored)",
+                data=mesh_to_3mf_bytes(mesh, feature_mask, base_color, feature_color),
+                file_name=f"{result['svg_name']}_3d.3mf",
+                mime="model/3mf",
+                help="Plate and artwork tagged with the colors above, for color-aware slicers/viewers.",
+            )
