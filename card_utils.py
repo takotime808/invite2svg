@@ -1,3 +1,4 @@
+# Copyright (c) 2025 takotime808
 """Shared image-processing pipeline for locating a photographed card and its
 printed border band. Used by extract_border.py and extract_text.py."""
 

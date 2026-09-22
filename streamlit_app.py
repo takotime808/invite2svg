@@ -1,3 +1,4 @@
+# Copyright (c) 2025 takotime808
 """
 Streamlit UI wrapping the photo -> SVG pipeline in this repo.
 
@@ -112,6 +113,13 @@ if shutil.which("potrace") is None:
 
 uploaded = st.file_uploader("Upload a photo of the card", type=["png", "jpg", "jpeg"])
 
+example_path = Path(__file__).parent / "data" / "wedding_invite.png"
+if example_path.exists():
+    if st.button(f"Use example image ({example_path.name})"):
+        st.session_state["use_example"] = True
+if uploaded is not None:
+    st.session_state["use_example"] = False
+
 with st.sidebar:
     st.header("Mode")
     mode = st.radio(
@@ -136,8 +144,16 @@ with st.sidebar:
     alphamax = st.slider("Alphamax (corner threshold)", 0.0, 1.34, 1.0)
     opttolerance = st.slider("Opttolerance (curve-fit tolerance)", 0.0, 1.0, 0.2)
 
-if uploaded is not None:
-    file_bytes = np.frombuffer(uploaded.read(), np.uint8)
+using_example = uploaded is None and st.session_state.get("use_example", False)
+
+if uploaded is not None or using_example:
+    if uploaded is not None:
+        file_bytes = np.frombuffer(uploaded.read(), np.uint8)
+        name_stem = Path(uploaded.name).stem
+    else:
+        file_bytes = np.frombuffer(example_path.read_bytes(), np.uint8)
+        name_stem = example_path.stem
+
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if img is None:
         st.error("Could not decode that image.")
@@ -179,7 +195,7 @@ if uploaded is not None:
         st.download_button(
             "Download SVG",
             data=svg_text,
-            file_name=Path(uploaded.name).stem + ".svg",
+            file_name=name_stem + ".svg",
             mime="image/svg+xml",
         )
 

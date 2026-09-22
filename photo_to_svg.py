@@ -1,3 +1,4 @@
+# Copyright (c) 2025 takotime808
 """
 Convert a photographed invitation into a single vector SVG that fully
 captures the border pattern and all text, corrected for the camera's
