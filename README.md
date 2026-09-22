@@ -41,9 +41,28 @@ pick full-card / border-only / text-only, tune the same options via sliders,
 and download the resulting SVG.
 
 ```sh
-pip install -r requirements.txt   # streamlit, opencv-python-headless, numpy
+pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
 Requires `potrace` on PATH, same as `photo_to_svg.py`. Deploying to Streamlit
 Community Cloud picks up `packages.txt` to install it automatically.
+
+### 3D Wedding Invite page
+
+The **3D Wedding Invite** page (`pages/1_🧊_3D_Wedding_Invite.py`) extrudes a
+3"x5" base plate and the invite's SVG artwork into a single watertight solid,
+via `card3d_utils.py`:
+
+1. Parses the SVG (any producer, including potrace's group-transform output)
+   into filled polygons, resolving letterform holes (e.g. the counter of an
+   "o") by containment nesting rather than trusting winding direction.
+2. Scales/centers the artwork onto the plate, preserving aspect ratio.
+3. Assembles the final solid face-by-face (background top surface, base
+   sides/bottom, per-feature walls/caps) using a quality-constrained
+   Delaunay triangulation ([triangle](https://rufat.be/triangle/)),
+   giving a single watertight solid without needing a 3D boolean.
+4. Renders it interactively (Plotly) and offers an STL download for 3D printing.
+
+It picks up the SVG generated on the Photo → SVG page automatically (via
+`st.session_state`), or you can upload any other `.svg` file directly.

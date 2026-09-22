@@ -182,6 +182,9 @@ if uploaded is not None or using_example:
                 st.error(str(e))
                 st.stop()
 
+        st.session_state["generated_svg"] = svg_text
+        st.session_state["generated_svg_name"] = name_stem
+
         with col2:
             st.subheader("Traced ink mask")
             st.image(tink, use_container_width=True)
@@ -201,5 +204,7 @@ if uploaded is not None or using_example:
 
         with st.expander("View raw SVG source"):
             st.code(svg_text, language="xml")
+
+        st.info("Ready to extrude this onto a 3D card — open **3D Wedding Invite** in the sidebar.")
 else:
     st.info("Upload a photo to get started.")
